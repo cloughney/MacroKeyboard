@@ -16,12 +16,12 @@
 
 enum TKeyState {INACTIVE, DEBOUNCING, ACTIVE, HOLDING};
 
-typedef struct TKeys {
+struct TKey {
 	uint8_t pin;
 	enum TKeyState state;
 	uint32_t stateStartMs;
 	uint16_t keys[MAX_COMBINATION_KEYS];
-} TKey;
+};
 
 TKey keys[NUMBER_OF_KEYS] = {
 	{ .pin =  6, .state = INACTIVE, .stateStartMs = 0, .keys = { KEY_F13 } },
@@ -116,9 +116,10 @@ void handleDialTurn() {
 	if (rotPosCurrent != rotPosLast) {
 		uint16_t diff = abs(rotPosCurrent - rotPosLast);
 		
-		ConsumerKeycode cmd = (rotPosLast < rotPosCurrent) ? MEDIA_VOLUME_UP : MEDIA_VOLUME_DOWN;
+		KeyboardKeycode key = (rotPosCurrent > rotPosLast) ? KEY_F23 : KEY_F24;
 		for (uint8_t i = 0; i < diff; i++) {
-			Consumer.write(cmd);
+			Keyboard.press(key);
+			Keyboard.release(key);
 		}
 
 		rotPosLast = rotPosCurrent;
