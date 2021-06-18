@@ -3,67 +3,76 @@
 #include <TimerOne.h>
 #include <HID-Project.h>
 
-#define NUMBER_OF_KEYS			8
-#define MAX_COMBINATION_KEYS	4
+// #define DEBUG
 
-#define DEBOUNCING_MS			20
-#define FIRST_REPEAT_CODE_MS	500
-#define REPEAT_CODE_MS			150
+#define NUMBER_OF_KEYS          8
+#define MAX_COMBINATION_KEYS    4
+
+#define DEBOUNCING_MS          20
+#define FIRST_REPEAT_CODE_MS  500
+#define REPEAT_CODE_MS        150
 
 #define ENCODER_CLK				A0
 #define ENCODER_DT				A1
-#define ENCODER_SW				A2
+#define ENCODER_SW				A3
 
-enum TKeyState {INACTIVE, DEBOUNCING, ACTIVE, HOLDING};
+enum KeyState { Open, Debouncing, Pressed, Held };
 
-struct TKey {
+struct Key {
 	uint8_t pin;
-	enum TKeyState state;
+	enum KeyState state;
 	uint32_t stateStartMs;
 	uint16_t keys[MAX_COMBINATION_KEYS];
 };
 
-TKey keys[NUMBER_OF_KEYS] = {
-	{ .pin =  6, .state = INACTIVE, .stateStartMs = 0, .keys = { KEY_F13 } },
-	{ .pin =  7, .state = INACTIVE, .stateStartMs = 0, .keys = { KEY_F14 } },
-	{ .pin =  8, .state = INACTIVE, .stateStartMs = 0, .keys = { KEY_F15 } },
-	{ .pin =  9, .state = INACTIVE, .stateStartMs = 0, .keys = { KEY_F16 } },
-	{ .pin = 15, .state = INACTIVE, .stateStartMs = 0, .keys = { KEY_F17 } },
-	{ .pin = 14, .state = INACTIVE, .stateStartMs = 0, .keys = { KEY_F18 } },
-	{ .pin =  5, .state = INACTIVE, .stateStartMs = 0, .keys = { KEY_F19 } },
-	{ .pin = 10, .state = INACTIVE, .stateStartMs = 0, .keys = { KEY_F20 } }
-};
+Key keys[NUMBER_OF_KEYS] = {
+	{ .pin =  6, .state = Open, .stateStartMs = 0, .keys = { KEY_F13 } },
+	{ .pin =  7, .state = Open, .stateStartMs = 0, .keys = { KEY_F14 } },
+	{ .pin =  8, .state = Open, .stateStartMs = 0, .keys = { KEY_F15 } },
+	{ .pin =  9, .state = Open, .stateStartMs = 0, .keys = { KEY_F16 } },
+	{ .pin = 15, .state = Open, .stateStartMs = 0, .keys = { KEY_F17 } },
+	{ .pin = 14, .state = Open, .stateStartMs = 0, .keys = { KEY_F18 } },
+	{ .pin =  5, .state = Open, .stateStartMs = 0, .keys = { KEY_F19 } },
+	{ .pin = 10, .state = Open, .stateStartMs = 0, .keys = { KEY_F20 } }
+}; 
 
 ClickEncoder *encoder;
 int16_t rotPosLast, rotPosCurrent;
+bool applyDialModifier = false;
 
-void timerIsr() {
-	encoder->service();
-}
+void timerIsr() { encoder->service(); }
 
 bool stateExceedsThreshold(uint8_t keyIndex, uint16_t threshold) {
 	return millis() - keys[keyIndex].stateStartMs > threshold;
 }
 
-void resetState(uint8_t keyIndex) {
-	TKey* key = &keys[keyIndex];
+void resetKeyState(uint8_t keyIndex) {
+	Key* key = &keys[keyIndex];
 
-	key->state = INACTIVE;
+	key->state = Open;
 	key->stateStartMs = millis();
 }
 
-uint8_t sendKeyPress(uint8_t keyIndex) {
-	TKey *key = &keys[keyIndex];
+uint8_t triggerKey(uint8_t keyIndex) {
+	Key *key = &keys[keyIndex];
 
-	for (uint8_t i = 0; i < MAX_COMBINATION_KEYS; i++) {
-		if (key->keys[i]) {
-			Keyboard.press((KeyboardKeycode)key->keys[i]);
-		} else {
-			break;
-		}
+	if (applyDialModifier) {
+		Keyboard.press(KEY_LEFT_ALT);
 	}
 
-	Keyboard.releaseAll();
+	for (uint8_t i = 0; i < MAX_COMBINATION_KEYS; i++) {
+		if (!key->keys[i]) break;
+		Keyboard.press((KeyboardKeycode)key->keys[i]);
+	}
+
+	for (uint8_t i = 0; i < MAX_COMBINATION_KEYS; i++) {
+		if (!key->keys[i]) break;
+		Keyboard.release((KeyboardKeycode)key->keys[i]);
+	}
+
+	if (applyDialModifier) {
+		Keyboard.release(KEY_LEFT_ALT);
+	}
 }
 
 void handleKeyPress() {
@@ -72,38 +81,57 @@ void handleKeyPress() {
 
 		switch (keys[i].state) {
 
-			case INACTIVE:
+			case Open:
 				if (pressed) {
-					keys[i].state = DEBOUNCING;
+					keys[i].state = Debouncing;
 					keys[i].stateStartMs = millis();
+					#ifdef DEBUG
+					Serial.print("Key[Open -> Debouncing]: ");
+					Serial.println(i);
+					#endif
 				}
 				break;
 
-			case DEBOUNCING:
+			case Debouncing:
 				if (!pressed) {
-					resetState(i);
+					resetKeyState(i);
 				} else if (stateExceedsThreshold(i, DEBOUNCING_MS)) {
-					keys[i].state = ACTIVE;
-					sendKeyPress(i);
+					keys[i].state = Pressed;
+					#ifndef DEBUG
+					triggerKey(i);
+					#else
+					Serial.print("Key[Debouncing -> Pressed]: ");
+					Serial.println(i);
+					#endif
 				}
 				break;
 			
-			case ACTIVE:
+			case Pressed:
 				if (!pressed) {
-					resetState(i);
+					resetKeyState(i);
 				} else if (stateExceedsThreshold(i, FIRST_REPEAT_CODE_MS)) {
-					keys[i].state = HOLDING;
+					keys[i].state = Held;
 					keys[i].stateStartMs = millis();
-					sendKeyPress(i);
+					#ifndef DEBUG
+					triggerKey(i);
+					#else
+					Serial.print("Key[Pressed -> Held]: ");
+					Serial.println(i);
+					#endif
 				}
 				break;
 
-			case HOLDING:
+			case Held:
 				if (!pressed) {
-					resetState(i);
+					resetKeyState(i);
 				} else if (stateExceedsThreshold(i, REPEAT_CODE_MS)) {
 					keys[i].stateStartMs = millis();
-					sendKeyPress(i);
+					#ifndef DEBUG
+					triggerKey(i);
+					#else
+					Serial.print("Key[Held]: ");
+					Serial.println(i);
+					#endif
 				}
 				break;
 		}
@@ -116,10 +144,15 @@ void handleDialTurn() {
 	if (rotPosCurrent != rotPosLast) {
 		uint16_t diff = abs(rotPosCurrent - rotPosLast);
 		
-		KeyboardKeycode key = (rotPosCurrent > rotPosLast) ? KEY_F23 : KEY_F24;
+		KeyboardKeycode key = (rotPosCurrent > rotPosLast) ? KEY_F24 : KEY_F23;
 		for (uint8_t i = 0; i < diff; i++) {
+			#ifndef DEBUG
 			Keyboard.press(key);
 			Keyboard.release(key);
+			#else
+			Serial.print("Dial turned ");
+			Serial.println(rotPosCurrent - rotPosLast);
+			#endif
 		}
 
 		rotPosLast = rotPosCurrent;
@@ -127,9 +160,16 @@ void handleDialTurn() {
 }
 
 void handleDialPress() {
-	ClickEncoder::Button b = encoder->getButton();
-	if (b != ClickEncoder::Open) {
-		switch (b) {
+	ClickEncoder::Button button = encoder->getButton();
+	if (button != ClickEncoder::Open) {
+		#ifndef DEBUG
+		switch (button) {
+			case ClickEncoder::Held:
+				applyDialModifier = true;
+				break;
+			case ClickEncoder::Released:
+				applyDialModifier = false;
+				break;
 			case ClickEncoder::Clicked:
 				Keyboard.press(KEY_F21);
 				Keyboard.release(KEY_F21);
@@ -139,10 +179,25 @@ void handleDialPress() {
 				Keyboard.release(KEY_F22);
 				break;
 		}
+		#else
+		Serial.print("Button: ");
+		#define VERBOSECASE(label) case label: Serial.println(#label); break;
+		switch (button) {
+			VERBOSECASE(ClickEncoder::Pressed);
+			VERBOSECASE(ClickEncoder::Held)
+			VERBOSECASE(ClickEncoder::Released)
+			VERBOSECASE(ClickEncoder::Clicked)
+			VERBOSECASE(ClickEncoder::DoubleClicked)
+		}
+		#endif
 	}
 }
 
 void setup() {
+	#ifdef DEBUG
+	Serial.begin(9600);
+	#endif
+
 	Consumer.begin();
 	Keyboard.begin();
 
